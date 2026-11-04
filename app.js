@@ -386,7 +386,10 @@ function renderHome() {
   app.innerHTML = `
     <section class="hero">
       <div class="hero-top">
-      <div class="hero-photo"><img src="img/hero.jpg" alt="Kerrostaloja jäätyneen lahden rannalla talvella, ihmisiä kävelee jäällä" fetchpriority="high"></div>
+      <div class="hero-photo">
+        <img src="img/hero.jpg" alt="Kerrostaloja jäätyneen lahden rannalla talvella, ihmisiä kävelee jäällä" fetchpriority="high">
+        ${window.matchMedia("(prefers-reduced-motion: reduce), (max-width: 700px)").matches ? "" : `<video class="hero-video" autoplay muted playsinline preload="auto" poster="img/hero.jpg" aria-hidden="true"><source src="img/hero.mp4" type="video/mp4"></video>`}
+      </div>
       <div class="hero-copy">
         <div class="inner">
           <div class="hero-text">
@@ -474,6 +477,15 @@ function renderHome() {
   bindCommon();
   bindHomeSearch();
   startBoard(featured.slice(0, 4));
+  loopHeroVideo();
+}
+
+// the clip starts on the same frame as the photo beneath it, so fading out and restarting hides the jump back
+function loopHeroVideo() {
+  const v = app.querySelector(".hero-video");
+  if (!v) return;
+  v.addEventListener("timeupdate", () => { if (v.duration) v.classList.toggle("out", v.currentTime > v.duration - 1.2); });
+  v.addEventListener("ended", () => setTimeout(() => { v.currentTime = 0; v.play().catch(() => {}); }, 900));
 }
 
 function bindHomeSearch() {
