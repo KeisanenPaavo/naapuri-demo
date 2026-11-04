@@ -484,6 +484,7 @@ function renderHome() {
 function loopHeroVideo() {
   const v = app.querySelector(".hero-video");
   if (!v) return;
+  v.defaultPlaybackRate = v.playbackRate = 0.6;
   v.addEventListener("timeupdate", () => { if (v.duration) v.classList.toggle("out", v.currentTime > v.duration - 1.2); });
   v.addEventListener("ended", () => setTimeout(() => { v.currentTime = 0; v.play().catch(() => {}); }, 900));
 }
