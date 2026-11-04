@@ -100,6 +100,28 @@ const BUILDINGS = [
   }
 ];
 
+// key figures read from uploaded financial statements; years run oldest to newest, money per living m²
+const FIN = {
+  kaarna: { years: [2023, 2024, 2025], sources: 2, hoito: [4.35, 4.45, 4.60], rahoitus: [3.10, 3.10, 3.10], laina: [700, 660, 620], saatavat: [0.6, 0.7, 0.8], tulos: 4200,
+    pts: [[2028, "Julkisivun korjaus", 210], [2031, "Ikkunoiden kunnostus", 95]],
+    flags: [["ok", "Putkiremontin laina lyhenee aikataulussa, ja rahoitusvastike on pysynyt samana kolme vuotta."]] },
+  pellava: { years: [2023, 2024, 2025], sources: 3, hoito: [4.05, 4.10, 4.20], rahoitus: [0.40, 0.40, 0.40], laina: [120, 105, 90], saatavat: [0.2, 0.3, 0.3], tulos: 11800,
+    pts: [[2027, "Hissin modernisointi", 60], [2030, "Vesikaton uusiminen", 140]],
+    flags: [["ok", "Lähes velaton taloyhtiö. Tulevat remontit voidaan todennäköisesti rahoittaa ilman suurta lainaa."]] },
+  koivu: { years: [2023, 2024, 2025], sources: 1, hoito: [4.40, 4.65, 4.90], rahoitus: [0, 0, 0], laina: [0, 0, 0], saatavat: [1.1, 1.8, 2.6], tulos: -6300,
+    pts: [[2027, "Salaojat ja kellarin kosteuskorjaus", 180], [2028, "Putkiremontti (linjasaneeraus)", 1100]],
+    flags: [["warn", "Maksamattomat vastikkeet ovat kasvaneet kolmena vuonna peräkkäin."], ["warn", "Putkiremontti 2028 nostaa yhtiölainan arviolta noin 1 100 euroon neliöltä."]] },
+  tuulensuu: { years: [2023, 2024, 2025], sources: 2, hoito: [3.90, 4.00, 4.10], rahoitus: [6.80, 6.80, 6.80], laina: [1450, 1450, 1450], saatavat: [0.7, 0.9, 1.1], tulos: 2100,
+    pts: [[2034, "Ensimmäinen kattohuolto", 25]],
+    flags: [["warn", "Yhtiölainan lyhennysvapaa päättyy 2029. Sen jälkeen rahoitusvastike nousee selvästi."]] },
+  meri: { years: [2023, 2024, 2025], sources: 1, hoito: [4.10, 4.20, 4.30], rahoitus: [2.40, 2.40, 2.40], laina: [470, 440, 410], saatavat: [0.4, 0.4, 0.4], tulos: 3900,
+    pts: [[2029, "Parvekkeiden korjaus", 85]],
+    flags: [["ok", "Remonttien lainat lyhenevät tasaisesti, eikä maksuhäiriöitä ole kertynyt."]] }
+};
+// what the demo "reads" from an upload for a building that has no statement yet
+const SAMPLE_FIN = { vaski: { years: [2025], sources: 1, hoito: [5.40], rahoitus: [0], laina: [0], saatavat: [0.2], tulos: 1800,
+  pts: [[2027, "Ikkunoiden kunnostus", 140], [2029, "Ulkoverhouksen maalaus", 60]], flags: [["ok", "Velaton taloyhtiö."]] } };
+
 /* ---------- facade illustrations ---------- */
 function facade(b) {
   const L = b.look, W = 240, G = 170;
@@ -157,6 +179,10 @@ function facade(b) {
 let USER = {};
 try { USER = JSON.parse(localStorage.getItem("naapuri-demo-reviews") || "{}"); } catch (e) { USER = {}; }
 const saveUser = () => { try { localStorage.setItem("naapuri-demo-reviews", JSON.stringify(USER)); } catch (e) {} };
+let USERFIN = {};
+try { USERFIN = JSON.parse(localStorage.getItem("naapuri-demo-fin") || "{}"); } catch (e) { USERFIN = {}; }
+const saveFin = () => { try { localStorage.setItem("naapuri-demo-fin", JSON.stringify(USERFIN)); } catch (e) {} };
+const finOf = b => USERFIN[b.id] || FIN[b.id] || null;
 const reviewsOf = b => [...(USER[b.id] || []), ...b.reviews];
 const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
 const scoreOf = rv => avg(CATS.map(([k]) => rv.s[k]));
@@ -173,7 +199,162 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const matches = q => { q = q.trim().toLowerCase(); return q ? BUILDINGS.filter(b => (b.name + " " + b.area + " " + b.city + " " + b.company).toLowerCase().includes(q)) : BUILDINGS; };
 
 const app = document.getElementById("app");
-const state = { id: null, query: "", sort: "score", tab: "all", writing: false, draft: {}, toast: "", helpful: {}, bought: false };
+const state = { id: null, query: "", sort: "score", tab: "all", writing: false, draft: {}, toast: "", helpful: {}, bought: false, up: null, finToast: "" };
+
+/* ---------- finance ---------- */
+const eur2 = n => n.toFixed(2).replace(".", ",") + " €";
+const eur0 = n => Math.round(n).toLocaleString("fi-FI") + " €";
+const last = a => a[a.length - 1];
+const METRICS = [
+  ["hoito", "Hoitovastike", "€/m²/kk", eur2, false],
+  ["rahoitus", "Rahoitusvastike", "€/m²/kk", eur2, false],
+  ["laina", "Yhtiölaina", "€/m²", eur0, false],
+  ["saatavat", "Maksamattomat vastikkeet", "% vastikkeista", n => n.toFixed(1).replace(".", ",") + " %", true]
+];
+function compare(key, v) {
+  const vals = BUILDINGS.map(finOf).filter(Boolean).map(f => last(f[key]));
+  const m = avg(vals);
+  if (m === 0) return v > 0 ? "Muita taloja korkeampi" : "Muiden talojen tasolla";
+  return v > m * 1.2 ? "Muita taloja korkeampi" : v < m * 0.8 ? "Muita taloja matalampi" : "Muiden talojen tasolla";
+}
+function spark(arr, bad) {
+  if (arr.length < 2 || Math.min(...arr) === Math.max(...arr)) return "";
+  const w = 84, h = 26, mn = Math.min(...arr), mx = Math.max(...arr), span = mx - mn || 1;
+  const pts = arr.map((v, i) => [2 + i * (w - 4) / (arr.length - 1), h - 3 - (v - mn) / span * (h - 6)]);
+  const up = last(arr) > arr[0] * 1.05, down = last(arr) < arr[0] * 0.95;
+  const color = up ? (bad ? "var(--s-bad)" : "var(--muted)") : down ? (bad ? "var(--s-good)" : "var(--muted)") : "var(--muted)";
+  const [lx, ly] = last(pts);
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/><circle cx="${lx}" cy="${ly}" r="3" fill="${color}"/></svg>`;
+}
+
+function financeHtml(b) {
+  const f = finOf(b), up = state.up;
+  let body;
+  if (up) body = uploadHtml(b, up);
+  else if (!f) body = `
+    <div class="fin-empty">
+      <p class="lead">Tämän talon tilinpäätöstä ei ole vielä ladattu.</p>
+      <p class="muted">Asukas tai osakas voi ladata tilinpäätöksen PDF:nä. Poimimme siitä vastikkeet, lainat, maksamattomat vastikkeet ja tulevat remontit. Nimet ja allekirjoitukset jätetään pois, eikä alkuperäistä tiedostoa julkaista.</p>
+      <button class="btn" id="fin-up">Lataa tilinpäätös</button>
+      <p class="small muted" style="margin-top:10px">Lataajana saat yhden syväraportin veloituksetta.</p>
+    </div>`;
+  else body = `
+    <p class="fin-src">Tilikausi ${last(f.years)}. Lähde: ${plural(f.sources, "asukkaan lataama tilinpäätös", "asukkaiden lataamaa tilinpäätöstä, luvut täsmäävät")}.</p>
+    <div class="kpis">
+      ${METRICS.map(([k, label, unit, fm, bad]) => { const v = last(f[k]); return `<div class="kpi">
+        <div class="kl">${label} <span class="muted">${unit}</span></div>
+        <div class="kv">${fm(v)}${spark(f[k], bad)}</div>
+        <div class="kc">${compare(k, v)}${f.years.length > 1 ? `, ${f.years[0]}: ${fm(f[k][0])}` : ""}</div>
+      </div>`; }).join("")}
+    </div>
+    ${f.flags.map(([t, txt]) => `<p class="flag ${t}">${txt}</p>`).join("")}
+    <h3 style="margin-top:26px">Tulevat remontit</h3>
+    <ul class="pts">${f.pts.map(([y, what, cost]) => `<li><span class="py">${y}</span><span>${what}</span><span class="pc">noin ${eur0(cost)}/m²</span></li>`).join("")}</ul>
+    <p class="small muted" style="margin-top:8px">Kustannusarviot ovat kunnossapitotarveselvityksestä. Tilikauden tulos ${eur0(f.tulos)}.</p>
+    <button class="textlink" id="fin-up" style="margin-top:14px">Lataa uudempi tilinpäätös</button>`;
+  return `<section id="talous">
+    <h2>Talous</h2>
+    ${state.finToast ? `<div class="toast" role="status">${state.finToast}</div>` : ""}
+    ${body}
+  </section>`;
+}
+
+const STAGES = ["Tunnistetaan tilikausi", "Luetaan tuloslaskelma ja tase", "Haetaan kunnossapitotarveselvitys", "Poistetaan nimet ja allekirjoitukset"];
+function uploadHtml(b, up) {
+  if (up.step === 1) return `
+    <form class="upload" id="up-form" novalidate>
+      <h3>Lataa tilinpäätös: ${b.name}</h3>
+      <label class="drop" for="up-file">
+        <svg viewBox="0 0 40 48" aria-hidden="true"><path d="M4 2h22l10 10v34H4z" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"/><path d="M26 2v10h10" fill="none" stroke="var(--ink)" stroke-width="2"/><path d="M11 24h18M11 30h18M11 36h11" stroke="var(--muted)" stroke-width="2"/></svg>
+        <span><strong>${up.file ? esc(up.file) : "Valitse PDF-tiedosto"}</strong><br><span class="muted small">${up.file ? "Vaihda tiedosto klikkaamalla" : "tai vedä tiedosto tähän"}</span></span>
+        <input id="up-file" type="file" accept="application/pdf,.pdf" class="sr">
+      </label>
+      <label class="check"><input type="checkbox" id="up-ok"${up.ok ? " checked" : ""}> Olen taloyhtiön osakas tai asukas, ja minulla on oikeus jakaa nämä tiedot.</label>
+      <p class="small muted">Demossa tiedostoa ei lähetetä minnekään, ja luetut luvut ovat esimerkkejä.</p>
+      <p class="err" id="up-err" hidden></p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">Lue tilinpäätös</button><button class="btn line" type="button" data-up-cancel>Peruuta</button></div>
+    </form>`;
+  if (up.step === 2) return `
+    <div class="upload" aria-live="polite">
+      <h3>Luetaan tiedostoa ${esc(up.file)}</h3>
+      <ol class="stages">${STAGES.map((s, i) => `<li class="${i < up.stage ? "done" : i === up.stage ? "now" : ""}">${s}</li>`).join("")}</ol>
+    </div>`;
+  const v = up.vals;
+  return `
+    <form class="upload" id="up-confirm" novalidate>
+      <h3>Tarkista luetut luvut</h3>
+      <p class="muted small">Korjaa luku, jos se ei vastaa tilinpäätöstä. Julkaisemme vain nämä luvut, emme itse tiedostoa.</p>
+      <div class="two">
+        <label class="f" for="u-year">Tilikausi<input id="u-year" inputmode="numeric" value="${v.year}"></label>
+        <label class="f" for="u-hoito">Hoitovastike, €/m²/kk<input id="u-hoito" inputmode="decimal" value="${String(v.hoito).replace(".", ",")}"></label>
+        <label class="f" for="u-rahoitus">Rahoitusvastike, €/m²/kk<input id="u-rahoitus" inputmode="decimal" value="${String(v.rahoitus).replace(".", ",")}"></label>
+        <label class="f" for="u-laina">Yhtiölaina, €/m²<input id="u-laina" inputmode="decimal" value="${v.laina}"></label>
+        <label class="f" for="u-saatavat">Maksamattomat vastikkeet, %<input id="u-saatavat" inputmode="decimal" value="${String(v.saatavat).replace(".", ",")}"></label>
+      </div>
+      <p class="small muted">Lisäksi luettiin ${plural(v.pts.length, "tuleva remontti", "tulevaa remonttia")} kunnossapitotarveselvityksestä.</p>
+      <p class="err" id="up-err" hidden></p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">Vahvista ja julkaise</button><button class="btn line" type="button" data-up-cancel>Peruuta</button></div>
+    </form>`;
+}
+
+function bindFinance(b) {
+  const start = document.getElementById("fin-up");
+  if (start) start.addEventListener("click", () => { state.up = { step: 1, file: "", ok: false }; state.finToast = ""; renderBuilding(b); document.getElementById("talous").scrollIntoView({ block: "start" }); });
+  app.querySelectorAll("[data-up-cancel]").forEach(el => el.addEventListener("click", () => { state.up = null; renderBuilding(b); }));
+  const up = state.up;
+  if (!up) return;
+  if (up.step === 1) {
+    const file = document.getElementById("up-file"), drop = app.querySelector(".drop");
+    file.addEventListener("change", () => { up.file = file.files[0] ? file.files[0].name : ""; up.ok = document.getElementById("up-ok").checked; renderBuilding(b); });
+    drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { up.file = f.name; up.ok = document.getElementById("up-ok").checked; renderBuilding(b); } });
+    document.getElementById("up-ok").addEventListener("change", e => { up.ok = e.target.checked; });
+    document.getElementById("up-form").addEventListener("submit", e => {
+      e.preventDefault();
+      const err = document.getElementById("up-err");
+      if (!up.file) { err.textContent = "Valitse ensin tilinpäätös PDF-tiedostona."; err.hidden = false; return; }
+      if (!/\.pdf$/i.test(up.file)) { err.textContent = "Tiedoston pitää olla PDF. Valitse toinen tiedosto."; err.hidden = false; return; }
+      if (!up.ok) { err.textContent = "Vahvista, että olet taloyhtiön osakas tai asukas."; err.hidden = false; return; }
+      up.step = 2; up.stage = 0; renderBuilding(b);
+      const tick = () => {
+        if (state.up !== up) return;
+        up.stage++;
+        if (up.stage >= STAGES.length) {
+          const src = FIN[b.id] || SAMPLE_FIN[b.id] || SAMPLE_FIN.vaski;
+          up.vals = { year: last(src.years), hoito: last(src.hoito), rahoitus: last(src.rahoitus), laina: last(src.laina), saatavat: last(src.saatavat), pts: src.pts };
+          up.step = 3;
+        } else setTimeout(tick, 650);
+        renderBuilding(b);
+      };
+      setTimeout(tick, 650);
+    });
+  }
+  if (up.step === 3) {
+    document.getElementById("up-confirm").addEventListener("submit", e => {
+      e.preventDefault();
+      const num = id => parseFloat(document.getElementById(id).value.replace(",", ".").replace(/\s/g, ""));
+      const vals = { year: num("u-year"), hoito: num("u-hoito"), rahoitus: num("u-rahoitus"), laina: num("u-laina"), saatavat: num("u-saatavat") };
+      const bad = Object.entries(vals).find(([, n]) => !isFinite(n) || n < 0);
+      const err = document.getElementById("up-err");
+      if (bad) { err.textContent = "Tarkista luvut: kenttiin käyvät vain numerot, eivätkä ne voi olla negatiivisia."; err.hidden = false; return; }
+      const base = finOf(b) || SAMPLE_FIN[b.id] || SAMPLE_FIN.vaski;
+      const same = finOf(b) && last(base.years) === vals.year;
+      const push = (k) => same ? [...base[k].slice(0, -1), vals[k]] : [...(finOf(b) ? base[k] : []), vals[k]].slice(-4);
+      USERFIN[b.id] = {
+        years: same ? base.years : [...(finOf(b) ? base.years : []), vals.year].slice(-4),
+        sources: finOf(b) ? base.sources + 1 : 1,
+        hoito: push("hoito"), rahoitus: push("rahoitus"), laina: push("laina"), saatavat: push("saatavat"),
+        tulos: base.tulos, pts: up.vals.pts, flags: base.flags
+      };
+      saveFin();
+      state.up = null;
+      state.finToast = "Tilinpäätöksen luvut julkaistu. Saat yhden syväraportin veloituksetta. Demossa tiedot näkyvät vain sinun selaimessasi.";
+      renderBuilding(b);
+      document.getElementById("talous").scrollIntoView({ block: "start" });
+    });
+  }
+}
 let boardTimer = null;
 
 function boardHtml(b) {
@@ -275,6 +456,7 @@ function renderHome() {
             <h2>Näin arvioimme</h2>
             <div class="how-item"><h3>Vain asukkaat arvioivat</h3><p>Asuminen talossa vahvistetaan ennen kuin arvio julkaistaan. Arviot näkyvät nimettöminä.</p></div>
             <div class="how-item"><h3>Omistajat ja vuokralaiset erikseen</h3><p>Näet, arvioivatko omistajat taloa eri tavalla kuin vuokralaiset ja poismuuttaneet.</p></div>
+            <div class="how-item"><h3>Talouden luvut tilinpäätöksistä</h3><p>Asukkaat lataavat taloyhtiön tilinpäätöksen. Siitä poimitaan vastikkeet, lainat ja tulevat remontit, mutta itse asiakirjaa ei julkaista.</p></div>
             <div class="how-item"><h3>Taloa arvioidaan, ei naapureita</h3><p>Naapureita ei mainita nimeltä. Ilmoitetut arviot tarkistetaan ennen kuin ne palaavat näkyviin.</p></div>
           </div>
         </div>
@@ -412,6 +594,8 @@ function renderBuilding(b) {
           <p class="gapnote">${gapNote}</p>
         </section>
 
+        ${financeHtml(b)}
+
         <section id="reviews">
           <div class="section-head" style="margin-bottom:0">
             <h2>Arviot</h2>
@@ -458,6 +642,7 @@ function renderBuilding(b) {
   const w = document.getElementById("write");
   if (w) w.addEventListener("click", () => openForm(b));
   if (state.writing) bindForm(b);
+  bindFinance(b);
 }
 
 function openForm(b) {
@@ -525,7 +710,7 @@ function go(view, id) {
     renderHome(); history.replaceState(null, "", location.pathname);
     document.getElementById("how").scrollIntoView({ block: "start" }); return;
   }
-  state.writing = false; state.draft = {}; state.toast = ""; state.bought = false;
+  state.writing = false; state.draft = {}; state.toast = ""; state.bought = false; state.up = null; state.finToast = "";
   if (view === "building") {
     const b = BUILDINGS.find(x => x.id === id);
     if (!b) return go("home");
